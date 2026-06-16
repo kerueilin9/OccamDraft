@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .browser import CliError, PlaywrightCli
 from .config import find_sut, load_config, resolve_profile_secrets
-from .draft import DraftGenerator
+from .draft import DraftGenerator, ReviewProcessor, review_needs_revision
 from .explore import Explorer
 from .llm import gemini_from_env
 
@@ -27,6 +27,10 @@ def parser():
     draft.add_argument("--output", type=Path)
     draft.add_argument("--model")
     draft.add_argument("--max-routes", type=int, default=8)
+    revise = commands.add_parser("revise", help="apply review.json decisions")
+    revise.add_argument("run_dir", type=Path)
+    revise.add_argument("--review", type=Path)
+    revise.add_argument("--model")
     return root
 
 
@@ -56,13 +60,25 @@ def main():
             print(f"valid: {len(config.suts)} SUT(s)")
         elif args.command == "explore":
             asyncio.run(_explore(args))
-        else:
+        elif args.command == "draft":
             tasks = DraftGenerator(gemini_from_env(args.model)).generate(
                 args.run_dir, output=args.output, max_routes=args.max_routes
             )
             print(json.dumps({
                 "tasks": len(tasks),
                 "output": str((args.output or args.run_dir / "drafts").resolve()),
+            }, indent=2))
+        else:
+            llm = gemini_from_env(args.model) if review_needs_revision(args.run_dir, args.review) else None
+            result = ReviewProcessor(llm).process(args.run_dir, review=args.review)
+            review = args.review or args.run_dir / "drafts" / "review.json"
+            root = review.parent.parent if review.parent.name == "revised" else review.parent
+            print(json.dumps({
+                "accepted_tasks": result["accepted"],
+                "revised_tasks": result["revised"],
+                "removed_tasks": result["removed"],
+                "accepted_dir": str((root / "accepted").resolve()),
+                "revised_dir": str((root / "revised").resolve()),
             }, indent=2))
     except (CliError, RuntimeError, ValueError) as error:
         raise SystemExit(f"error: {error}") from None

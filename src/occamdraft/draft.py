@@ -25,6 +25,8 @@ DRAFTS_SCHEMA = {
         },
     },
 }
+GHERKIN_SCHEMA = DRAFTS_SCHEMA["items"]
+REVIEW_TYPES = {"accept", "revise", "remove"}
 
 
 class DraftGenerator:
@@ -38,13 +40,16 @@ class DraftGenerator:
         start_url = _start_url(manifest)
         _ensure_storage_state(run_dir, manifest)
         tasks: list[DraftTask] = []
+        task_routes: list[tuple[DraftTask, Route]] = []
         for route in _candidate_routes(run_dir, manifest)[:max_routes]:
             raw_tasks = _loads_array(self.llm.generate_json(self._prompt(run_dir, manifest, route), schema=DRAFTS_SCHEMA))
             for raw in raw_tasks:
                 task = _task(manifest, route, raw, order=len(tasks) + 1, start_url=start_url)
                 if task:
                     tasks.append(task)
+                    task_routes.append((task, route))
         _write_tasks(output, tasks)
+        _write_review(output, manifest, task_routes)
         return tasks
 
     def _prompt(self, run_dir: Path, manifest: RouteManifest, route: Route) -> str:
@@ -81,6 +86,78 @@ when is executable UI steps, and then is observable expected result.
 Evidence:
 {json.dumps(payload, ensure_ascii=False)}
 """.strip()
+
+
+class ReviewProcessor:
+    def __init__(self, llm=None, *, max_snapshot_chars: int = 8000):
+        self.llm = llm
+        self.max_snapshot_chars = max_snapshot_chars
+
+    def process(self, run_dir: Path, *, review: Path | None = None) -> dict:
+        manifest = RouteManifest.model_validate_json((run_dir / "route-manifest.json").read_text("utf-8"))
+        review = review or run_dir / "drafts" / "review.json"
+        root = _workspace_root(review)
+        accepted, revised = root / "accepted", root / "revised"
+        data = json.loads(review.read_text("utf-8"))
+        revised_items, result = [], {"accepted": [], "revised": [], "removed": []}
+        for item in data.get("items", []):
+            decision = item.get("type", "").strip()
+            if decision not in REVIEW_TYPES:
+                raise ValueError(f"Invalid review type for {item.get('task_id')}: {decision!r}")
+            task_id = item["task_id"]
+            task = DraftTask.model_validate_json((review.parent / item["task_file"]).read_text("utf-8"))
+            if decision == "remove":
+                result["removed"].append(task_id)
+                continue
+            if decision == "revise":
+                route = _route_for_page(manifest, item["draft"]["page_url"])
+                task = task.model_copy(update={"gherkin": self._revise(run_dir, route, item, task)})
+                revised_items.append((task, route))
+                result["revised"].append(task_id)
+            else:
+                _write_task(accepted, task)
+                result["accepted"].append(task_id)
+        _refresh_task_index(accepted)
+        _write_tasks(revised, [task for task, _ in revised_items])
+        _write_review(revised, manifest, revised_items)
+        _write_json(revised / "review-result.json", result)
+        return result
+
+    def _revise(self, run_dir: Path, route: Route, item: dict, task: DraftTask) -> Gherkin:
+        if not self.llm:
+            raise ValueError("Gemini API key is required for revise decisions")
+        if not item.get("feedback", "").strip():
+            raise ValueError(f"Missing feedback for revise task: {item['task_id']}")
+        evidence_dir = run_dir / "evidence" / route.evidence_id
+        metadata = json.loads((evidence_dir / "metadata.json").read_text("utf-8"))
+        snapshot = (evidence_dir / "snapshot.yml").read_text("utf-8")[:self.max_snapshot_chars]
+        prompt = f"""
+Revise this draft Gherkin task using the human feedback and page evidence.
+Return one object matching the provided response JSON schema.
+
+Rules:
+- Keep the task executable from the same start page.
+- Keep existing navigation steps unless the feedback explicitly changes them.
+- Do not invent hidden pages, fields, buttons, success messages, or business rules.
+- Write typed input steps as: Fill in the From date field with "2026/04/01".
+- Use the same wording pattern for all typed fields: Fill in the <field label> field with "<value>".
+
+Human feedback:
+{item["feedback"]}
+
+Draft:
+{json.dumps(_review_draft(task, item["draft"]["page_url"]), ensure_ascii=False)}
+
+Evidence:
+{json.dumps({"route": route.model_dump(), "metadata": metadata, "snapshot": snapshot}, ensure_ascii=False)}
+""".strip()
+        return Gherkin.model_validate(_loads_object(self.llm.generate_json(prompt, schema=GHERKIN_SCHEMA)))
+
+
+def review_needs_revision(run_dir: Path, review: Path | None = None) -> bool:
+    review = review or run_dir / "drafts" / "review.json"
+    data = json.loads(review.read_text("utf-8"))
+    return any(item.get("type", "").strip() == "revise" for item in data.get("items", []))
 
 
 def _candidate_routes(run_dir: Path, manifest: RouteManifest) -> list[Route]:
@@ -152,22 +229,81 @@ def _loads_array(text: str) -> list[dict]:
     return data
 
 
+def _loads_object(text: str) -> dict:
+    text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.IGNORECASE | re.MULTILINE).strip()
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError("LLM response must be a JSON object")
+    return data
+
+
 def _write_tasks(output: Path, tasks: list[DraftTask]) -> None:
     output.mkdir(parents=True, exist_ok=True)
     for path in output.glob("task*.json"):
         path.unlink()
     for task in tasks:
-        path = output / f"task{task.order:02d}.json"
-        path.write_text(json.dumps(task.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
-    (output / "draft-tasks.json").write_text(
-        json.dumps([task.model_dump() for task in tasks], ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+        _write_task(output, task)
+    _write_json(output / "draft-tasks.json", [task.model_dump() for task in tasks])
+
+
+def _write_task(output: Path, task: DraftTask) -> None:
+    output.mkdir(parents=True, exist_ok=True)
+    _write_json(output / f"task{task.order:02d}.json", task.model_dump())
+
+
+def _refresh_task_index(output: Path) -> None:
+    if not output.exists():
+        return
+    tasks = [json.loads(path.read_text("utf-8")) for path in sorted(output.glob("task*.json"))]
+    _write_json(output / "draft-tasks.json", tasks)
+
+
+def _write_review(output: Path, manifest: RouteManifest, task_routes: list[tuple[DraftTask, Route]]) -> None:
+    _write_json(output / "review.json", {
+        "version": 1,
+        "run_id": manifest.run_id,
+        "sut_id": manifest.sut_id,
+        "items": [_review_item(task, route) for task, route in task_routes],
+    })
+
+
+def _review_item(task: DraftTask, route: Route) -> dict:
+    return {
+        "task_file": f"task{task.order:02d}.json",
+        "task_id": task.task_id,
+        "type": "",
+        "feedback": "",
+        "draft": _review_draft(task, route.canonical_url),
+    }
+
+
+def _review_draft(task: DraftTask, page_url: str) -> dict:
+    return {
+        "require_login": task.require_login,
+        "page_url": page_url,
+        "gherkin": task.gherkin.model_dump(),
+    }
+
+
+def _workspace_root(review: Path) -> Path:
+    return review.parent.parent if review.parent.name == "revised" else review.parent
 
 
 def _metadata(run_dir: Path, route: Route) -> dict:
     path = run_dir / "evidence" / route.evidence_id / "metadata.json"
     return json.loads(path.read_text("utf-8"))
+
+
+def _route_for_page(manifest: RouteManifest, page_url: str) -> Route:
+    for route in manifest.routes:
+        if page_url in {route.canonical_url, route.final_url, route.requested_url}:
+            return route
+    raise ValueError(f"No route found for page_url: {page_url}")
+
+
+def _write_json(path: Path, value) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _local_actions(actions: list[str]) -> list[str]:

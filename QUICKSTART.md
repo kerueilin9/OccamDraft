@@ -86,6 +86,64 @@ artifacts/<run_id>/drafts/
   task01.json
   task02.json
   draft-tasks.json
+  review.json
 ```
 
 每個 task 會使用 OccamQA JSON-based Gherkin 格式，並優先產生新增、修改與刪除情境。
+
+`review.json` 是人工審查工作單，格式如下：
+
+```json
+{
+  "version": 1,
+  "run_id": "timeoff-navigation-final",
+  "sut_id": "timeoff",
+  "items": [
+    {
+      "task_file": "task01.json",
+      "task_id": "timeoff_draft_001",
+      "type": "",
+      "feedback": "",
+      "draft": {
+        "require_login": true,
+        "page_url": "http://localhost:3102/users/add",
+        "gherkin": {
+          "feature": "...",
+          "scenario": "...",
+          "given": ["..."],
+          "when": ["..."],
+          "then": ["..."]
+        }
+      }
+    }
+  ]
+}
+```
+
+`type` 可填 `accept`、`revise` 或 `remove`。若填 `revise`，請在 `feedback`
+描述要如何修改草稿。
+
+## 套用人工回饋
+
+填完 `review.json` 後執行：
+
+```powershell
+occamdraft revise artifacts/<run_id>
+```
+
+輸出位於：
+
+```text
+artifacts/<run_id>/drafts/
+  accepted/
+    task01.json
+    draft-tasks.json
+  revised/
+    task02.json
+    draft-tasks.json
+    review.json
+    review-result.json
+```
+
+`accepted/` 是已通過審查的可用任務集合；`revised/` 是下一輪仍需審查的任務 queue。
+若 `revised/` 沒有 `task*.json`，代表迭代流程結束。`remove` 的任務不會再輸出。

@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "browser": {
+    "cli_executable": "playwright-cli",
+    "headed": false,
+    "snapshot_depth": null,
+    "command_timeout_seconds": 30
+  },
+  "suts": [
+    {
+      "sut_id": "timeoff",
+      "site_name": "timeoff",
+      "base_url": "http://localhost:3102",
+      "allowed_origins": [
+        "http://localhost:3102"
+      ],
+      "profiles": [
+        {
+          "profile_id": "admin",
+          "role": "administrator",
+          "start_routes": [
+            "/"
+          ],
+          "auth": {
+            "type": "form",
+            "login_route": "/login",
+            "username": "${TIMEOFF_ADMIN_USERNAME}",
+            "password": "${TIMEOFF_ADMIN_PASSWORD}",
+            "username_selector": "input[name='username']",
+            "password_selector": "input[name='password']",
+            "submit_selector": "#submit_login",
+            "success": {
+              "url_not_contains": "/login",
+              "visible_selector": "nav"
+            }
+          }
+        }
+      ],
+      "exploration": {
+        "max_depth": 4,
+        "max_pages": 100,
+        "max_pages_per_route_family": 3,
+        "include_query_keys": [],
+        "destructive_actions": "deny"
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "browser": {
+    "cli_executable": "playwright-cli",
+    "command_timeout_seconds": 30
+  },
+  "suts": [
+    {
+      "sut_id": "example",
+      "site_name": "example",
+      "base_url": "https://example.com",
+      "allowed_origins": [
+        "https://example.com"
+      ],
+      "profiles": [
+        {
+          "profile_id": "guest",
+          "role": "guest",
+          "start_routes": [
+            "/"
+          ],
+          "auth": {
+            "type": "none"
+          }
+        }
+      ],
+      "exploration": {
+        "max_depth": 1,
+        "max_pages": 3,
+        "max_pages_per_route_family": 1
+      }
+    }
+  ]
+}

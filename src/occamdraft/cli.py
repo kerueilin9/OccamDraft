@@ -6,7 +6,9 @@ from pathlib import Path
 
 from .browser import CliError, PlaywrightCli
 from .config import find_sut, load_config, resolve_profile_secrets
+from .draft import DraftGenerator
 from .explore import Explorer
+from .llm import gemini_from_env
 
 
 def parser():
@@ -20,6 +22,11 @@ def parser():
     explore.add_argument("--profile", action="append", default=[])
     explore.add_argument("--output", type=Path, default=Path("artifacts"))
     explore.add_argument("--run-id")
+    draft = commands.add_parser("draft", help="generate draft Gherkin tasks from a run")
+    draft.add_argument("run_dir", type=Path)
+    draft.add_argument("--output", type=Path)
+    draft.add_argument("--model")
+    draft.add_argument("--max-routes", type=int, default=8)
     return root
 
 
@@ -47,9 +54,17 @@ def main():
         if args.command == "validate":
             config = load_config(args.profiles, resolve_env=False)
             print(f"valid: {len(config.suts)} SUT(s)")
-        else:
+        elif args.command == "explore":
             asyncio.run(_explore(args))
-    except (CliError, ValueError) as error:
+        else:
+            tasks = DraftGenerator(gemini_from_env(args.model)).generate(
+                args.run_dir, output=args.output, max_routes=args.max_routes
+            )
+            print(json.dumps({
+                "tasks": len(tasks),
+                "output": str((args.output or args.run_dir / "drafts").resolve()),
+            }, indent=2))
+    except (CliError, RuntimeError, ValueError) as error:
         raise SystemExit(f"error: {error}") from None
 
 

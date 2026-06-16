@@ -103,3 +103,21 @@ class RouteManifest(BaseModel):
     sut_id: str
     playwright_cli_version: str
     routes: list[Route]
+
+
+class Gherkin(BaseModel):
+    feature: str
+    scenario: str
+    given: list[str]
+    when: list[str]
+    then: list[str]
+
+
+class DraftTask(BaseModel):
+    sites: list[str]
+    task_id: str
+    order: int
+    require_login: bool
+    storage_state: str
+    start_url: str
+    gherkin: Gherkin

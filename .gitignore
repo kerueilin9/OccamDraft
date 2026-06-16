@@ -7,6 +7,7 @@ profiles/profile.json
 # Runtime artifacts
 artifacts/
 exports/
+.adk/
 *.db
 *.sqlite
 *.sqlite3

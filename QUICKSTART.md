@@ -147,3 +147,35 @@ artifacts/<run_id>/drafts/
 
 `accepted/` 是已通過審查的可用任務集合；`revised/` 是下一輪仍需審查的任務 queue。
 若 `revised/` 沒有 `task*.json`，代表迭代流程結束。`remove` 的任務不會再輸出。
+
+## 使用 ADK Agent
+
+ADK agent 位於：
+
+```text
+agents/occamdraft_agent/
+```
+
+啟動 CLI 對話：
+
+```powershell
+adk run agents/occamdraft_agent
+```
+
+或啟動 Web UI：
+
+```powershell
+adk web --port 8000
+```
+
+可對 agent 說：
+
+```text
+幫我檢查 artifacts/timeoff-navigation-final 的狀態
+幫我產生 artifacts/timeoff-navigation-final 的 draft
+我已經填好 artifacts/timeoff-navigation-final/drafts/review.json，幫我套用 review
+我已經填好 artifacts/timeoff-navigation-final/drafts/revised/review.json，幫我繼續套用
+```
+
+Agent 不會替你修改 `review.json`。你仍需自行打開 JSON，填入 `accept`、`revise`
+或 `remove`；若填 `revise`，也要填 `feedback`。Agent 會在你填完後讀取並套用。

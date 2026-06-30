@@ -1,5 +1,6 @@
 # Secrets and authenticated browser state
 profiles/profile.json
+profiles/realworld.profile.json
 .env
 .auth/
 .playwright-cli/
